@@ -3,9 +3,8 @@ package watch
 import (
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"os"
-	"strings"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -29,7 +28,7 @@ type Event struct {
 
 type watch struct {
 	path  string
-	files map[string]os.FileInfo
+	files map[string]FileInfo
 }
 
 type Watcher struct {
@@ -42,21 +41,24 @@ type Watcher struct {
 	isRunning     bool
 }
 
-func directoryMap(path string) (map[string]os.FileInfo, error) {
+type FileInfo struct {
+	os.FileInfo
+	path string
+}
+
+func directoryMap(path string) (map[string]FileInfo, error) {
 
 	_, err := os.Lstat(path)
 	if err != nil {
 		return nil, err
 	}
-	m := make(map[string]os.FileInfo)
-	d, err := ioutil.ReadDir(path)
-	if err != nil {
-		return nil, err
-	}
+	m := make(map[string]FileInfo)
 
-	for _, f := range d {
-		m[f.Name()] = f
-	}
+	filepath.Walk(path, func(path string, f os.FileInfo, err error) (e error) {
+		m[f.Name()] = FileInfo{f, path}
+		return nil
+	})
+
 	return m, nil
 }
 
@@ -162,30 +164,29 @@ func (w *Watcher) start() {
 
 				// look for new and modified files
 				for k, v := range n {
-					f := curWatch.files[k]
-					path := strings.Join([]string{curWatch.path, k}, string(os.PathSeparator))
-					if f == nil {
+					f, ok := curWatch.files[k]
+
+					if !ok {
 						// new event
-						w.Events <- Event{Name: path, Op: Create}
+						w.Events <- Event{Name: v.path, Op: Create}
 					} else {
 						// modified event
 						if f.ModTime() != v.ModTime() {
-							w.Events <- Event{Name: path, Op: Write}
+							w.Events <- Event{Name: v.path, Op: Write}
 						}
 						// chmod event
 						if f.Mode() != v.Mode() {
-							w.Events <- Event{Name: path, Op: Chmod}
+							w.Events <- Event{Name: v.path, Op: Chmod}
 						}
 					}
 				}
 
 				// and deleted files
-				for k, _ := range curWatch.files {
-					f := n[k]
-					path := strings.Join([]string{curWatch.path, k}, string(os.PathSeparator))
-					if f == nil {
+				for k, v := range curWatch.files {
+					_, ok := n[k]
+					if !ok {
 						// remove event
-						w.Events <- Event{Name: path, Op: Remove}
+						w.Events <- Event{Name: v.path, Op: Remove}
 					}
 				}
 
